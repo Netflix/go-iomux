@@ -1,7 +1,6 @@
 package iomux
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -58,17 +57,17 @@ func NewMux[T comparable]() (*Mux[T], error) {
 	return newMux[T](network)
 }
 
-// NewMuxUnix Create a new Mux using `unix` network
+// NewMuxUnix Create a new Mux using 'unix' network.
 func NewMuxUnix[T comparable]() (*Mux[T], error) {
 	return newMux[T]("unix")
 }
 
-// NewMuxUnixGram Create a new Mux using `unixgram` network
+// NewMuxUnixGram Create a new Mux using 'unixgram' network.
 func NewMuxUnixGram[T comparable]() (*Mux[T], error) {
 	return newMux[T]("unixgram")
 }
 
-// NewMuxUnixPacket Create a new Mux using `unixpacket` network
+// NewMuxUnixPacket Create a new Mux using 'unixpacket' network.
 func NewMuxUnixPacket[T comparable]() (*Mux[T], error) {
 	return newMux[T]("unixpacket")
 }
@@ -116,7 +115,7 @@ func newMux[T comparable](network string) (*Mux[T], error) {
 	return mux, nil
 }
 
-// Tag Create a file to receive data tagged with tag T. Returns an *os.File ready for writing
+// Tag Create a file to receive data tagged with tag T. Returns an *os.File ready for writing.
 func (mux *Mux[T]) Tag(tag T) (*os.File, error) {
 	if mux.closed {
 		return nil, MuxClosed
@@ -170,7 +169,7 @@ func (mux *Mux[T]) Read() ([]byte, T, error) {
 	}
 }
 
-// ReadWhile Read the receiver until waitFn returns
+// ReadWhile Read until waitFn returns, returning the read data.
 func (mux *Mux[T]) ReadWhile(waitFn func() error) ([]*TaggedData[T], error) {
 	if mux.closed {
 		return nil, MuxClosed
@@ -185,14 +184,10 @@ func (mux *Mux[T]) ReadWhile(waitFn func() error) ([]*TaggedData[T], error) {
 	if err != nil {
 		return nil, err
 	}
+	if mux.network != "unixgram" {
+		return mux.repairTruncatedReads(td), waitErr
+	}
 	return td, waitErr
-}
-
-// ReadLinesWhile line buffer the result of ReadWhile to avoid interleaving of output for non-ordered networks
-func (mux *Mux[T]) ReadLinesWhile(waitFn func() error) ([]*TaggedData[T], error) {
-	return mux.scanLines(func() ([]*TaggedData[T], error) {
-		return mux.ReadWhile(waitFn)
-	})
 }
 
 // ReadUntil Read the receiver until done receives true
@@ -216,25 +211,21 @@ func (mux *Mux[T]) ReadUntil(done <-chan bool) ([]*TaggedData[T], error) {
 				// lastRead isn't required for unixgram, but we have one connection per tag for other network types
 				lastRead++
 				if lastRead >= len(mux.recvconns) {
-					return result, nil
+					break
 				}
 			}
 		} else {
 			lastRead = 0
-			td := &TaggedData[T]{
+			result = append(result, &TaggedData[T]{
 				Data: data,
 				Tag:  tag,
-			}
-			result = append(result, td)
+			})
 		}
 	}
-}
-
-// ReadLinesUntil line buffer the result of ReadUtil to avoid interleaving of output for non-ordered networks
-func (mux *Mux[T]) ReadLinesUntil(done <-chan bool) ([]*TaggedData[T], error) {
-	return mux.scanLines(func() ([]*TaggedData[T], error) {
-		return mux.ReadUntil(done)
-	})
+	if mux.network != "unixgram" {
+		return mux.repairTruncatedReads(result), nil
+	}
+	return result, nil
 }
 
 func (mux *Mux[T]) Close() error {
@@ -323,14 +314,10 @@ func (mux *Mux[T]) createSender(tag T) (*os.File, error) {
 	return file, nil
 }
 
-func (mux *Mux[T]) scanLines(readFn func() ([]*TaggedData[T], error)) ([]*TaggedData[T], error) {
-	read, err := readFn()
-	if err != nil {
-		return nil, err
-	}
+func (mux *Mux[T]) repairTruncatedReads(taggedData []*TaggedData[T]) []*TaggedData[T] {
 	tagLastIndex := make(map[T]int)
-	for i := len(read) - 1; i >= 0; i-- {
-		tag := read[i].Tag
+	for i := len(taggedData) - 1; i >= 0; i-- {
+		tag := taggedData[i].Tag
 		if _, ok := tagLastIndex[tag]; !ok {
 			tagLastIndex[tag] = i
 		}
@@ -339,23 +326,17 @@ func (mux *Mux[T]) scanLines(readFn func() ([]*TaggedData[T], error)) ([]*Tagged
 		}
 	}
 	lineBuffer := make(map[T][]byte)
-	var lines []*TaggedData[T]
-	for i, td := range read {
+	var result []*TaggedData[T]
+	for i, td := range taggedData {
 		tag := td.Tag
 		data := td.Data
-		if tagLastIndex[tag] == i {
+		if data[len(data)-1] == byte(10) || tagLastIndex[tag] == i {
 			td.Data = append(lineBuffer[tag], data...)
-			lines = append(lines, td)
+			result = append(result, td)
+			lineBuffer[tag] = nil
 		} else {
-			lastNewline := bytes.LastIndexByte(data, byte(10))
-			if lastNewline != len(data)-1 {
-				lineBuffer[tag] = append(lineBuffer[tag], data...)
-			} else {
-				td.Data = append(lineBuffer[tag], data...)
-				lines = append(lines, td)
-				lineBuffer[tag] = nil
-			}
+			lineBuffer[tag] = append(lineBuffer[tag], data...)
 		}
 	}
-	return lines, nil
+	return result
 }

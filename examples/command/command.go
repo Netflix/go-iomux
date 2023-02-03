@@ -16,10 +16,12 @@ const (
 	StdErr
 )
 
+// ignore errs for brevity in this example, you should handle these appropriately
 func main() {
 	mux, _ := iomux.NewMux[OutputType]()
 	defer mux.Close()
 	cmd := exec.Command("sh", "-c", "echo out1 && echo err1 1>&2 && echo out2")
+	// ignore errs for brevity in this example, these are unlikely to fail if the receiver could listen
 	stdout, _ := mux.Tag(StdOut)
 	stderr, _ := mux.Tag(StdErr)
 	cmd.Stdout = stdout

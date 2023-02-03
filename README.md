@@ -33,7 +33,9 @@ This module was inspired by Josh Triplett's Rust crate https://github.com/joshtr
 
 ## Limitations
 
-On Linux, `unixgram` sockets work perfectly, and the received data will be read in exactly the order it was written. On other platforms, `NewMux` defaults to `unix` as it's the least likely to have issues. The non-message oriented networks don't come with the strong ordering guarantees as `unixgram`, so can occasionally see writes of order. There are `ReadLine*` convenience functions to use newlines to detect out of order reads that ensures output lines aren't intermixed. These limitations do not affect the order of an individual connection, so output for a individual tag is always correct.
+Linux has no known limitation, `unixgram` is message centric and data will be read in exactly the order it was written. On other platforms, `NewMux` defaults to `unix` as it's the least likely to have issues. The non-message oriented networks don't come with the strong ordering guarantees as `unixgram`, so can occasionally see writes of order. 
+
+The `ReadWhile` and `ReadUntil` convenience functions use newlines to avoid intermixed output caused by truncated reads. These limitations do not affect the order of an individual connection, so output for an individual tag is always correct.
 
 ### macOS
 

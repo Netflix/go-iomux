@@ -72,14 +72,16 @@ func TestMuxRead(t *testing.T) {
 	}
 }
 
-func TestMuxReadLines(t *testing.T) {
+func TestMuxTruncatedRead(t *testing.T) {
 	mux, err := NewMuxUnixGram[string]()
 	assert.Nil(t, err)
 	taga, _ := mux.Tag("a")
 	tagb, _ := mux.Tag("b")
 	assert.Nil(t, err)
 
-	td, err := mux.ReadLinesWhile(func() error {
+	// use unixgram for exact control of the reads/writes, but lie about the network when reading
+	mux.network = "unix"
+	td, err := mux.ReadWhile(func() error {
 		io.WriteString(taga, "this is line 1\n")
 		io.WriteString(tagb, "this is line 2\n")
 		io.WriteString(taga, "this is line 3\n")
@@ -87,7 +89,6 @@ func TestMuxReadLines(t *testing.T) {
 		io.WriteString(taga, "this is line 5\n")
 		io.WriteString(tagb, " line 4")
 		io.WriteString(taga, "this is line 6\n")
-
 		return nil
 	})
 
