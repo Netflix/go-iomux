@@ -190,7 +190,7 @@ func (mux *Mux[T]) ReadWhile(waitFn func() error) ([]*TaggedData[T], error) {
 
 // ReadLinesWhile line buffer the result of ReadWhile to avoid interleaving of output for non-ordered networks
 func (mux *Mux[T]) ReadLinesWhile(waitFn func() error) ([]*TaggedData[T], error) {
-	return scanLines[T](func() ([]*TaggedData[T], error) {
+	return mux.scanLines(func() ([]*TaggedData[T], error) {
 		return mux.ReadWhile(waitFn)
 	})
 }
@@ -232,7 +232,7 @@ func (mux *Mux[T]) ReadUntil(done <-chan bool) ([]*TaggedData[T], error) {
 
 // ReadLinesUntil line buffer the result of ReadUtil to avoid interleaving of output for non-ordered networks
 func (mux *Mux[T]) ReadLinesUntil(done <-chan bool) ([]*TaggedData[T], error) {
-	return scanLines[T](func() ([]*TaggedData[T], error) {
+	return mux.scanLines(func() ([]*TaggedData[T], error) {
 		return mux.ReadUntil(done)
 	})
 }
@@ -323,7 +323,7 @@ func (mux *Mux[T]) createSender(tag T) (*os.File, error) {
 	return file, nil
 }
 
-func scanLines[T comparable](readFn func() ([]*TaggedData[T], error)) ([]*TaggedData[T], error) {
+func (mux *Mux[T]) scanLines(readFn func() ([]*TaggedData[T], error)) ([]*TaggedData[T], error) {
 	read, err := readFn()
 	if err != nil {
 		return nil, err
@@ -334,7 +334,7 @@ func scanLines[T comparable](readFn func() ([]*TaggedData[T], error)) ([]*Tagged
 		if _, ok := tagLastIndex[tag]; !ok {
 			tagLastIndex[tag] = i
 		}
-		if len(tagLastIndex) == 2 {
+		if len(tagLastIndex) == len(mux.senders) {
 			break
 		}
 	}
