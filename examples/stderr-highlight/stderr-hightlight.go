@@ -9,17 +9,24 @@ import (
 	"os/exec"
 )
 
+type OutputType int
+
+const (
+	StdOut OutputType = iota
+	StdErr
+)
+
 const colorRed = "\033[31m"
 const colorReset = "\033[0m"
 
 func main() {
-	mux, err := iomux.NewMuxUnixGram[int]()
+	mux, err := iomux.NewMuxUnixGram[OutputType]()
 	if err != nil {
 		panic(err)
 	}
 	cmd := exec.Command("sh", "-c", "echo out1 && echo err1 1>&2 && echo out2")
-	stdout, _ := mux.Tag(0)
-	stderr, _ := mux.Tag(1)
+	stdout, _ := mux.Tag(StdOut)
+	stderr, _ := mux.Tag(StdErr)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	done := make(chan bool)
@@ -42,13 +49,15 @@ func main() {
 			if errors.Unwrap(err) != os.ErrDeadlineExceeded {
 				panic(err)
 			} else if cmdDone {
+				// If this wasn't a unixgram, you'd need to read until you saw deadline exceeded n times,
+				// where n is the number of tags registered
 				break
 			}
 		} else {
 			switch t {
-			case 0:
+			case StdOut:
 				binary.Write(os.Stdout, binary.BigEndian, b)
-			case 1:
+			case StdErr:
 				io.WriteString(os.Stderr, colorRed)
 				binary.Write(os.Stderr, binary.BigEndian, b)
 				io.WriteString(os.Stderr, colorReset)
