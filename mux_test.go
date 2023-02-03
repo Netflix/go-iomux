@@ -147,6 +147,7 @@ func TestMuxCmd(t *testing.T) {
 			stderr, _ := mux.Tag(1)
 			cmd.Stdout = stdout
 			cmd.Stderr = stderr
+			cmd.Run()
 			td, err := mux.ReadWhile(func() error {
 				err := cmd.Run()
 				return err
