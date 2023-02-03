@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/binary"
 	"errors"
-	"github.com/netflix/iomux"
+	"github.com/netflix/go-iomux"
 	"io"
 	"os"
 	"os/exec"

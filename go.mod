@@ -1,4 +1,4 @@
-module github.com/netflix/iomux
+module github.com/netflix/go-iomux
 
 go 1.18
 
