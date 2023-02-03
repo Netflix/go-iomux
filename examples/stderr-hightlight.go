@@ -3,7 +3,7 @@ package main
 import (
 	"encoding/binary"
 	"errors"
-	"github.com/danielthomas/iomux"
+	"github.com/netflix/iomux"
 	"io"
 	"os"
 	"os/exec"
