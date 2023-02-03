@@ -8,7 +8,7 @@ This module was inspired by Josh Triplett's Rust crate https://github.com/joshtr
 
 ## Limitations
 
-On Linux, `unixgram` sockets work perfectly, and the received data will be read in exactly the order it was written. On other platforms, `NewMux` defaults to `unix` as it's the least likely to have issues. The non-message oriented networks don't come with the strong ordering guarantees as `unixgram`, but for most use cases, particularly console output from commands, output is rarely out of order (in cases where it matters, scanning and outputting only when reaching a newline is a potential solution).
+On Linux, `unixgram` sockets work perfectly, and the received data will be read in exactly the order it was written. On other platforms, `NewMux` defaults to `unix` as it's the least likely to have issues. The non-message oriented networks don't come with the strong ordering guarantees as `unixgram`, but for most use cases, particularly console output from commands, output is rarely out of order. In cases where it matters, there are `ReadLine*` variants of the convenience functions to use newlines to estimate the original write boundaries.
 
 For instance, `unixgram` on macOS has a message limit of 2048 bytes, larger writes fail with:
 ```
