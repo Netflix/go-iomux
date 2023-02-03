@@ -57,17 +57,17 @@ func NewMux[T comparable]() (*Mux[T], error) {
 	return newMux[T](network)
 }
 
-// NewMuxUnix Create a new Mux using "unix" network
+// NewMuxUnix Create a new Mux using `unix` network
 func NewMuxUnix[T comparable]() (*Mux[T], error) {
 	return newMux[T]("unix")
 }
 
-// NewMuxUnixGram Create a new Mux using "unixgram" network
+// NewMuxUnixGram Create a new Mux using `unixgram` network
 func NewMuxUnixGram[T comparable]() (*Mux[T], error) {
 	return newMux[T]("unixgram")
 }
 
-// NewMuxUnixPacket Create a new Mux using "unixpacket" network
+// NewMuxUnixPacket Create a new Mux using `unixpacket` network
 func NewMuxUnixPacket[T comparable]() (*Mux[T], error) {
 	return newMux[T]("unixpacket")
 }
@@ -79,9 +79,6 @@ func newMux[T comparable](network string) (*Mux[T], error) {
 	}
 	file := filepath.Join(dir, "recv.sock")
 	recvaddr, err := net.ResolveUnixAddr(network, file)
-	if err != nil {
-		return nil, err
-	}
 	if err != nil {
 		return nil, err
 	}
@@ -118,8 +115,7 @@ func newMux[T comparable](network string) (*Mux[T], error) {
 	return mux, nil
 }
 
-// Tag Create a file to receive data tagged with tag T
-// Returns an *os.File ready for writing, nil if an error occurred, and will be returned when an attempt to read is made
+// Tag Create a file to receive data tagged with tag T. Returns an *os.File ready for writing
 func (mux *Mux[T]) Tag(tag T) (*os.File, error) {
 	if mux.closed {
 		return nil, MuxClosed
@@ -131,7 +127,9 @@ func (mux *Mux[T]) Tag(tag T) (*os.File, error) {
 	return sender, nil
 }
 
-// Read perform a read
+// Read perform a read. Prefer the convenience functions ReadUtil and ReadWhile. For connection oriented networks, Read
+// round robins the receiver side connections, so when senders have finished writing, call read until you receive an
+// os.ErrDeadlineExceeded consecutive times for least the number of tags you have registered.
 func (mux *Mux[T]) Read() ([]byte, T, error) {
 	var emptyTag T
 	if mux.closed {
