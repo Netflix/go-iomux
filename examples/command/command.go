@@ -25,8 +25,7 @@ func main() {
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 	taggedData, err := mux.ReadWhile(func() error {
-		err := cmd.Run()
-		return err
+		return cmd.Run()
 	})
 	for _, td := range taggedData {
 		var w io.Writer
