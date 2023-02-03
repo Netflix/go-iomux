@@ -13,8 +13,7 @@ The primary use case is for multiplexing `exec.Cmd` stdout/stderr keeping the or
         cmd.Stdout = stdout
         cmd.Stderr = stderr
         taggedData, err := mux.ReadWhile(func() error {
-                err := cmd.Run()
-                return err
+                return cmd.Run()
         })
         for _, td := range taggedData {
                 var w io.Writer
