@@ -1,6 +1,7 @@
 package iomux
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -187,6 +188,13 @@ func (mux *Mux[T]) ReadWhile(waitFn func() error) ([]*TaggedData[T], error) {
 	return td, waitErr
 }
 
+// ReadLinesWhile line buffer the result of ReadWhile to avoid interleaving of output for non-ordered networks
+func (mux *Mux[T]) ReadLinesWhile(waitFn func() error) ([]*TaggedData[T], error) {
+	return scanLines[T](func() ([]*TaggedData[T], error) {
+		return mux.ReadWhile(waitFn)
+	})
+}
+
 // ReadUntil Read the receiver until done receives true
 func (mux *Mux[T]) ReadUntil(done <-chan bool) ([]*TaggedData[T], error) {
 	if mux.closed {
@@ -220,6 +228,13 @@ func (mux *Mux[T]) ReadUntil(done <-chan bool) ([]*TaggedData[T], error) {
 			result = append(result, td)
 		}
 	}
+}
+
+// ReadLinesUntil line buffer the result of ReadUtil to avoid interleaving of output for non-ordered networks
+func (mux *Mux[T]) ReadLinesUntil(done <-chan bool) ([]*TaggedData[T], error) {
+	return scanLines[T](func() ([]*TaggedData[T], error) {
+		return mux.ReadUntil(done)
+	})
 }
 
 func (mux *Mux[T]) Close() error {
@@ -306,4 +321,41 @@ func (mux *Mux[T]) createSender(tag T) (*os.File, error) {
 		return nil, err
 	}
 	return file, nil
+}
+
+func scanLines[T comparable](readFn func() ([]*TaggedData[T], error)) ([]*TaggedData[T], error) {
+	read, err := readFn()
+	if err != nil {
+		return nil, err
+	}
+	tagLastIndex := make(map[T]int)
+	for i := len(read) - 1; i >= 0; i-- {
+		tag := read[i].Tag
+		if _, ok := tagLastIndex[tag]; !ok {
+			tagLastIndex[tag] = i
+		}
+		if len(tagLastIndex) == 2 {
+			break
+		}
+	}
+	lineBuffer := make(map[T][]byte)
+	var lines []*TaggedData[T]
+	for i, td := range read {
+		tag := td.Tag
+		data := td.Data
+		if tagLastIndex[tag] == i {
+			td.Data = append(lineBuffer[tag], data...)
+			lines = append(lines, td)
+		} else {
+			lastNewline := bytes.LastIndexByte(data, byte(10))
+			if lastNewline != len(data)-1 {
+				lineBuffer[tag] = append(lineBuffer[tag], data...)
+			} else {
+				td.Data = append(lineBuffer[tag], data...)
+				lines = append(lines, td)
+				lineBuffer[tag] = nil
+			}
+		}
+	}
+	return lines, nil
 }

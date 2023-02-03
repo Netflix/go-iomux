@@ -47,7 +47,7 @@ func TestMuxReadClosed(t *testing.T) {
 	assert.ErrorIs(t, err, MuxClosed)
 }
 
-func TestMux(t *testing.T) {
+func TestMuxRead(t *testing.T) {
 	for _, network := range networks {
 		t.Run(network, func(t *testing.T) {
 			mux, err := newMux[string](network)
@@ -70,6 +70,40 @@ func TestMux(t *testing.T) {
 			assert.Equal(t, "hello tagb", string(td[1].Data))
 		})
 	}
+}
+
+func TestMuxReadLines(t *testing.T) {
+	mux, err := NewMuxUnixGram[string]()
+	assert.Nil(t, err)
+	taga, _ := mux.Tag("a")
+	tagb, _ := mux.Tag("b")
+	assert.Nil(t, err)
+
+	td, err := mux.ReadLinesWhile(func() error {
+		io.WriteString(taga, "this is line 1\n")
+		io.WriteString(tagb, "this is line 2\n")
+		io.WriteString(taga, "this is line 3\n")
+		io.WriteString(tagb, "this is")
+		io.WriteString(taga, "this is line 5\n")
+		io.WriteString(tagb, " line 4")
+		io.WriteString(taga, "this is line 6\n")
+
+		return nil
+	})
+
+	assert.Equal(t, 6, len(td))
+	assert.Equal(t, "this is line 1\n", string(td[0].Data))
+	assert.Equal(t, "a", td[0].Tag)
+	assert.Equal(t, "this is line 2\n", string(td[1].Data))
+	assert.Equal(t, "b", td[1].Tag)
+	assert.Equal(t, "this is line 3\n", string(td[2].Data))
+	assert.Equal(t, "a", td[2].Tag)
+	assert.Equal(t, "this is line 5\n", string(td[3].Data))
+	assert.Equal(t, "a", td[3].Tag)
+	assert.Equal(t, "this is line 4", string(td[4].Data))
+	assert.Equal(t, "b", td[4].Tag)
+	assert.Equal(t, "this is line 6\n", string(td[5].Data))
+	assert.Equal(t, "a", td[5].Tag)
 }
 
 func skipIfProtocolNotSupported(t *testing.T, err error, network string) {
