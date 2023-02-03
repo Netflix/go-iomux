@@ -97,7 +97,7 @@ func newMux[T comparable](network string) (*Mux[T], error) {
 			bufsize = 65536
 		}
 	case "unix", "unixpacket":
-		bufsize = 128
+		bufsize = 256
 	default:
 		return nil, fmt.Errorf("unknown network %s", network)
 	}
