@@ -18,6 +18,7 @@ const (
 
 func main() {
 	mux, _ := iomux.NewMux[OutputType]()
+	defer mux.Close()
 	cmd := exec.Command("sh", "-c", "echo out1 && echo err1 1>&2 && echo out2")
 	stdout, _ := mux.Tag(StdOut)
 	stderr, _ := mux.Tag(StdErr)

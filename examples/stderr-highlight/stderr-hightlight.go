@@ -21,6 +21,7 @@ const colorReset = "\033[0m"
 
 func main() {
 	mux, err := iomux.NewMuxUnixGram[OutputType]()
+	defer mux.Close()
 	if err != nil {
 		panic(err)
 	}
