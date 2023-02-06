@@ -33,9 +33,7 @@ This module was inspired by Josh Triplett's Rust crate https://github.com/joshtr
 
 ## Limitations
 
-Linux has no known limitation, `unixgram` is message centric and data will be read in exactly the order it was written. On other platforms, `NewMux` defaults to `unix` as it's the least likely to have issues. The non-message oriented networks don't come with the strong ordering guarantees as `unixgram`, so can occasionally see writes of order. 
-
-The `ReadWhile` and `ReadUntil` convenience functions use newlines to avoid intermixed output caused by truncated reads. These limitations do not affect the order of an individual connection, so output for an individual tag is always correct.
+On platforms other than Linux, `NewMux` defaults to `unix` rather than `unixgram` as it's the least likely to have issues. `unix` is connection oriented, so doesn't come with the ordering of `unixgram`, so can occasionally see writes of order. To address this limitation, the `ReadWhile` and `ReadUntil` convenience functions check for new lines at the end of writes (assuming console output) to delimit writes to try and avoid the possibility of intermixed output. These limitations do not affect the read order of an individual connection, so output for an individual tag is always consistent.
 
 ### macOS
 
