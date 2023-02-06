@@ -18,8 +18,9 @@ type Mux[T comparable] struct {
 	dir       string
 	recvaddr  *net.UnixAddr
 	recvconns []*net.UnixConn
-	recvbuf   []byte
-	recvidx   int
+	recvbufs  [][]byte
+	recvchan  chan *TaggedData[T]
+	recvmutex []sync.Mutex
 	acceptFn  func() error
 	senders   map[T]*net.UnixConn
 	closed    bool
@@ -29,14 +30,15 @@ type Mux[T comparable] struct {
 type TaggedData[T comparable] struct {
 	Tag  T
 	Data []byte
+	err  error
 }
-
-const deadline = 100 * time.Millisecond
 
 var (
 	MuxClosed        = errors.New("mux has been closed")
 	MuxNoConnections = errors.New("no senders have been connected")
 )
+
+const deadlineDuration = 100 * time.Millisecond
 
 // NewMux Create a new Mux using the best connection type for the platform
 func NewMux[T comparable]() (*Mux[T], error) {
@@ -82,29 +84,11 @@ func newMux[T comparable](network string) (*Mux[T], error) {
 	if err != nil {
 		return nil, err
 	}
-
-	// If we got at the underlying poll.FD it would be possible to call recvfrom with MSG_PEEK | MSG_TRUNC to size
-	// the buffer to the current packet, but for now we just set the maximum message size for the OS for message
-	// oriented unixgram, because the message truncates if it exceeds the buffer, and a modest read buffer otherwise.
-	bufsize := 0
-	switch network {
-	case "unixgram":
-		switch runtime.GOOS {
-		case "darwin":
-			bufsize = 2048
-		default:
-			bufsize = 65536
-		}
-	case "unix", "unixpacket":
-		bufsize = 256
-	default:
-		return nil, fmt.Errorf("unknown network %s", network)
-	}
 	mux := &Mux[T]{
 		network:  network,
 		dir:      dir,
 		recvaddr: recvaddr,
-		recvbuf:  make([]byte, bufsize),
+		recvchan: make(chan *TaggedData[T], 10),
 		acceptFn: func() error { return nil },
 		senders:  make(map[T]*net.UnixConn),
 	}
@@ -127,46 +111,55 @@ func (mux *Mux[T]) Tag(tag T) (*os.File, error) {
 	return sender, nil
 }
 
-// Read perform a read. Prefer the convenience functions ReadUtil and ReadWhile. For connection oriented networks, Read
-// round robins the receiver side connections, so when senders have finished writing, call read until you receive an
-// os.ErrDeadlineExceeded consecutive times for least the number of tags you have registered.
+// Read perform a read. Prefer the convenience functions ReadUtil and ReadWhile. For connection oriented networks, every
+// call to Read concurrently reads all connections, buffering and returning in order received for consecutive calls
+// to Read.
 func (mux *Mux[T]) Read() ([]byte, T, error) {
 	var emptyTag T
 	if mux.closed {
 		return nil, emptyTag, MuxClosed
 	}
-	numConns := len(mux.recvconns)
-	if numConns == 0 {
+	if len(mux.recvconns) == 0 {
 		return nil, emptyTag, MuxNoConnections
 	}
-	conn := mux.recvconns[mux.recvidx]
-	if mux.recvidx < numConns-1 {
-		mux.recvidx++
-	} else {
-		mux.recvidx = 0
-	}
-	conn.SetReadDeadline(time.Now().Add(deadline))
-	n, addr, err := conn.ReadFrom(mux.recvbuf)
-	var tag T
-	for t, c := range mux.senders {
-		sender := c.LocalAddr().String()
-		if addr != nil {
-			if addr != nil && addr.String() == sender {
-				tag = t
-				break
-			}
-		} else if conn.RemoteAddr() != nil && conn.RemoteAddr().String() == sender {
-			tag = t
-			break
+
+	for i, c := range mux.recvconns {
+		conn := c
+		buf := mux.recvbufs[i]
+		mutex := &mux.recvmutex[i]
+		if mutex.TryLock() {
+			go func() {
+				_ = conn.SetDeadline(time.Now().Add(deadlineDuration))
+				n, addr, err := conn.ReadFrom(buf)
+				var tag T
+				for t, c := range mux.senders {
+					sender := c.LocalAddr().String()
+					if addr != nil {
+						if addr != nil && addr.String() == sender {
+							tag = t
+							break
+						}
+					} else if conn.RemoteAddr() != nil && conn.RemoteAddr().String() == sender {
+						tag = t
+						break
+					}
+				}
+				if err != nil {
+					mux.recvchan <- &TaggedData[T]{err: err}
+				} else {
+					bytes := make([]byte, n)
+					copy(bytes, buf[0:n])
+					mux.recvchan <- &TaggedData[T]{Data: bytes, Tag: tag}
+				}
+				mutex.Unlock()
+			}()
 		}
 	}
-	if err != nil {
-		return nil, tag, err
-	} else {
-		bytes := make([]byte, n)
-		copy(bytes, mux.recvbuf[0:n])
-		return bytes, tag, nil
+	td := <-mux.recvchan
+	if td.err != nil {
+		return nil, td.Tag, td.err
 	}
+	return td.Data, td.Tag, td.err
 }
 
 // ReadWhile Read until waitFn returns, returning the read data.
@@ -246,9 +239,19 @@ func (mux *Mux[T]) Close() error {
 }
 
 func (mux *Mux[T]) startListener() error {
+	// If we got at the underlying poll.FD it would be possible to call recvfrom with MSG_PEEK | MSG_TRUNC to size
+	// the buffer to the current packet, but for now we just set the maximum message size for the OS for message
+	// oriented unixgram, because the message truncates if it exceeds the buffer, and a modest read buffer otherwise.
+	bufsize := 0
 	switch mux.network {
 	case "unixgram":
 		{
+			switch runtime.GOOS {
+			case "darwin":
+				bufsize = 2048
+			default:
+				bufsize = 65536
+			}
 			conn, err := net.ListenUnixgram(mux.network, mux.recvaddr)
 			if err != nil {
 				return err
@@ -256,16 +259,19 @@ func (mux *Mux[T]) startListener() error {
 			mux.closers = append(mux.closers, conn)
 			_ = conn.CloseWrite()
 			mux.recvconns = append(mux.recvconns, conn)
+			mux.recvbufs = append(mux.recvbufs, make([]byte, bufsize))
+			mux.recvmutex = append(mux.recvmutex, sync.Mutex{})
 		}
 	case "unix", "unixpacket":
 		{
+			bufsize = 256
 			listener, err := net.ListenUnix(mux.network, mux.recvaddr)
 			if err != nil {
 				return err
 			}
 			mux.closers = append(mux.closers, listener)
 			mux.acceptFn = func() error {
-				err := listener.SetDeadline(time.Now().Add(deadline))
+				err := listener.SetDeadline(time.Now().Add(deadlineDuration))
 				if err != nil {
 					return err
 				}
@@ -276,6 +282,8 @@ func (mux *Mux[T]) startListener() error {
 				mux.closers = append(mux.closers, conn)
 				_ = conn.CloseWrite()
 				mux.recvconns = append(mux.recvconns, conn)
+				mux.recvbufs = append(mux.recvbufs, make([]byte, bufsize))
+				mux.recvmutex = append(mux.recvmutex, sync.Mutex{})
 				return nil
 			}
 		}

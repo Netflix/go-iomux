@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"testing"
+	"time"
 )
 
 var networks = []string{
@@ -53,21 +54,47 @@ func TestMuxRead(t *testing.T) {
 			mux, err := newMux[string](network)
 			if err != nil {
 				skipIfProtocolNotSupported(t, err, network)
+				assert.Nil(t, err)
 			}
-			assert.Nil(t, err)
+
 			taga, _ := mux.Tag("a")
+			assert.Nil(t, err)
 			tagb, _ := mux.Tag("b")
 			assert.Nil(t, err)
 
-			td, err := mux.ReadWhile(func() error {
-				io.WriteString(taga, "hello taga")
-				io.WriteString(tagb, "hello tagb")
-				return nil
-			})
+			io.WriteString(taga, "hello taga")
+			bytes, tag, err := mux.Read()
+			assert.Nil(t, err)
+			assert.Equal(t, "a", tag)
+			assert.Equal(t, "hello taga", string(bytes))
 
-			assert.Equal(t, 2, len(td))
-			assert.Equal(t, "hello taga", string(td[0].Data))
-			assert.Equal(t, "hello tagb", string(td[1].Data))
+			io.WriteString(tagb, "hello tagb")
+			bytes, tag, err = mux.Read()
+			assert.Nil(t, err)
+			assert.Equal(t, "b", tag)
+			assert.Equal(t, "hello tagb", string(bytes))
+
+			bytes, tag, err = mux.Read()
+			assert.ErrorIs(t, errors.Unwrap(err), os.ErrDeadlineExceeded)
+		})
+	}
+}
+
+func TestMuxReadNoData(t *testing.T) {
+	for _, network := range networks {
+		t.Run(network, func(t *testing.T) {
+			mux, err := newMux[string](network)
+			if err != nil {
+				skipIfProtocolNotSupported(t, err, network)
+				assert.Nil(t, err)
+			}
+
+			mux.Tag("a")
+
+			bytes, tag, err := mux.Read()
+			assert.Nil(t, bytes)
+			assert.Equal(t, "", tag)
+			// assert error
 		})
 	}
 }
@@ -130,8 +157,10 @@ func TestMuxMultiple(t *testing.T) {
 
 			td, err := mux.ReadWhile(func() error {
 				io.WriteString(taga, "out1")
+				time.Sleep(1 * time.Millisecond)
 				io.WriteString(tagb, "err1")
 				io.WriteString(tagb, "err2")
+				time.Sleep(1 * time.Millisecond)
 				io.WriteString(tagc, "other")
 				return nil
 			})
@@ -157,34 +186,27 @@ func TestMuxCmd(t *testing.T) {
 			if err != nil {
 				skipIfProtocolNotSupported(t, err, network)
 			}
-			cmd := exec.Command("sh", "-c", "echo out1 && echo err1 1>&2 && echo out2")
+			// sleeps to avoid racing on connection oriented networks
+			cmd := exec.Command("sh", "-c", "echo out1 && sleep 0.1 && echo err1 1>&2 && sleep 0.1 && echo out2")
 			stdout, _ := mux.Tag(0)
 			stderr, _ := mux.Tag(1)
 			cmd.Stdout = stdout
 			cmd.Stderr = stderr
-			cmd.Run()
 			td, err := mux.ReadWhile(func() error {
 				err := cmd.Run()
 				return err
 			})
 
-			if len(td) == 2 && network != "unixgram" {
-				// not message based
-				out1 := td[0]
-				assert.Equal(t, 0, out1.Tag)
-				assert.Equal(t, "out1\nout2\n", string(out1.Data))
-			} else {
-				assert.Equal(t, 3, len(td))
-				out1 := td[0]
-				assert.Equal(t, 0, out1.Tag)
-				assert.Equal(t, "out1\n", string(out1.Data))
-				out2 := td[2]
-				assert.Equal(t, 0, out2.Tag)
-				assert.Equal(t, "out2\n", string(out2.Data))
-			}
+			assert.Equal(t, 3, len(td))
+			out1 := td[0]
+			assert.Equal(t, 0, out1.Tag)
+			assert.Equal(t, "out1\n", string(out1.Data))
 			err1 := td[1]
 			assert.Equal(t, 1, err1.Tag)
 			assert.Equal(t, "err1\n", string(err1.Data))
+			out2 := td[2]
+			assert.Equal(t, 0, out2.Tag)
+			assert.Equal(t, "out2\n", string(out2.Data))
 		})
 	}
 }
