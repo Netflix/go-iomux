@@ -12,7 +12,7 @@ The primary use case is for multiplexing `exec.Cmd` stdout/stderr keeping the or
         stderr, _ := mux.Tag(1)
         cmd.Stdout = stdout
         cmd.Stderr = stderr
-        taggedData, err := mux.ReadWhile(func() error {
+        taggedData, _ := mux.ReadWhile(func() error {
                 return cmd.Run()
         })
         for _, td := range taggedData {
