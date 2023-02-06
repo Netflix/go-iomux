@@ -224,9 +224,6 @@ func (mux *Mux[T]) ReadUntil(done <-chan bool) ([]*TaggedData[T], error) {
 			})
 		}
 	}
-	if mux.network != "unixgram" {
-		return mux.repairTruncatedReads(result), nil
-	}
 	return result, nil
 }
 
@@ -329,43 +326,4 @@ func (mux *Mux[T]) createSender(tag T) (*os.File, error) {
 		return nil, err
 	}
 	return file, nil
-}
-
-func (mux *Mux[T]) repairTruncatedReads(taggedData []*TaggedData[T]) []*TaggedData[T] {
-	tagLastIndex := make(map[T]int)
-	for i := len(taggedData) - 1; i >= 0; i-- {
-		tag := taggedData[i].Tag
-		if _, ok := tagLastIndex[tag]; !ok {
-			tagLastIndex[tag] = i
-		}
-		if len(tagLastIndex) == len(mux.senders) {
-			break
-		}
-	}
-	var bufferedData []*TaggedData[T]
-	var result []*TaggedData[T]
-	for i, td := range taggedData {
-		tag := td.Tag
-		data := td.Data
-		bufferLen := len(bufferedData)
-		var currentTag T
-		if bufferLen > 0 {
-			currentTag = bufferedData[0].Tag
-		} else {
-			currentTag = tag
-		}
-		lastByteNl := data[len(data)-1] == byte(10)
-		if (lastByteNl && currentTag == tag) || tagLastIndex[tag] == i {
-			for i, bd := range bufferedData {
-				if bd.Tag == tag {
-					td.Data = append(bd.Data, data...)
-					bufferedData = append(bufferedData[:i], bufferedData[i+1:]...)
-				}
-			}
-			result = append(result, td)
-		} else {
-			bufferedData = append(bufferedData, td)
-		}
-	}
-	return result
 }

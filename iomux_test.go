@@ -1,6 +1,7 @@
 package iomux
 
 import (
+	"encoding/binary"
 	"errors"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/sys/unix"
@@ -104,35 +105,28 @@ func TestMuxReadNoData(t *testing.T) {
 }
 
 func TestMuxTruncatedRead(t *testing.T) {
-	mux, err := NewMuxUnixGram[string]()
+	mux, err := NewMuxUnix[string]()
 	assert.Nil(t, err)
 	taga, _ := mux.Tag("a")
 	tagb, _ := mux.Tag("b")
 	assert.Nil(t, err)
 
-	// use unixgram for exact control of the reads/writes, but lie about the network when reading
-	mux.network = "unix"
 	td, err := mux.ReadWhile(func() error {
-		io.WriteString(taga, "this is line 1\n")
-		io.WriteString(tagb, "this is line 2\n")
-		io.WriteString(taga, "this is line 3\n")
-		io.WriteString(tagb, "this is")
-		io.WriteString(taga, "this is line 5\n")
-		io.WriteString(tagb, " line 4")
-		io.WriteString(taga, "this is line 6\n")
+		binary.Write(taga, binary.BigEndian, make([]byte, 256)) // Double the receive buffer size
+		time.Sleep(1 * time.Millisecond)
+		binary.Write(tagb, binary.BigEndian, make([]byte, 10))
+		time.Sleep(1 * time.Millisecond)
+		binary.Write(taga, binary.BigEndian, make([]byte, 20))
 		return nil
 	})
 
-	assert.Equal(t, 5, len(td))
-	assert.Equal(t, "this is line 1\n", string(td[0].Data))
+	assert.Equal(t, 3, len(td))
+	assert.Equal(t, 256, len(td[0].Data))
 	assert.Equal(t, "a", td[0].Tag)
-	assert.Equal(t, "this is line 2\n", string(td[1].Data))
+	assert.Equal(t, 10, len(td[1].Data))
 	assert.Equal(t, "b", td[1].Tag)
-	assert.Equal(t, "this is line 3\n", string(td[2].Data))
+	assert.Equal(t, 20, len(td[2].Data))
 	assert.Equal(t, "a", td[2].Tag)
-	assert.Equal(t, "this is line 4", string(td[3].Data))
-	assert.Equal(t, "b", td[3].Tag)
-	assert.Equal(t, "this is line 5\nthis is line 6\n", string(td[4].Data))
 }
 
 func skipIfProtocolNotSupported(t *testing.T, err error, network string) {
