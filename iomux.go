@@ -344,9 +344,10 @@ func (mux *Mux[T]) repairTruncatedReads(taggedData []*TaggedData[T]) []*TaggedDa
 		}
 		lastByteNl := data[len(data)-1] == byte(10)
 		if (lastByteNl && currentTag == tag) || tagLastIndex[tag] == i {
-			for _, bd := range bufferedData {
+			for i, bd := range bufferedData {
 				if bd.Tag == tag {
 					td.Data = append(bd.Data, data...)
+					bufferedData = append(bufferedData[:i], bufferedData[i+1:]...)
 				}
 			}
 			result = append(result, td)
