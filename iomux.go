@@ -131,26 +131,30 @@ func (mux *Mux[T]) Read() ([]byte, T, error) {
 			go func() {
 				_ = conn.SetDeadline(time.Now().Add(deadlineDuration))
 				n, addr, err := conn.ReadFrom(buf)
-				var tag T
+				td := &TaggedData[T]{err: err}
+				foundTag := false
 				for t, c := range mux.senders {
 					sender := c.LocalAddr().String()
 					if addr != nil {
 						if addr != nil && addr.String() == sender {
-							tag = t
+							foundTag = true
+							td.Tag = t
 							break
 						}
 					} else if conn.RemoteAddr() != nil && conn.RemoteAddr().String() == sender {
-						tag = t
+						foundTag = true
+						td.Tag = t
 						break
 					}
 				}
-				if err != nil {
-					mux.recvchan <- &TaggedData[T]{err: err}
-				} else {
-					bytes := make([]byte, n)
-					copy(bytes, buf[0:n])
-					mux.recvchan <- &TaggedData[T]{Data: bytes, Tag: tag}
+				if err == nil {
+					if !foundTag {
+						err = fmt.Errorf("could not find tag for %s", conn.RemoteAddr())
+					}
+					td.Data = make([]byte, n)
+					copy(td.Data, buf[0:n])
 				}
+				mux.recvchan <- td
 				mutex.Unlock()
 			}()
 		}

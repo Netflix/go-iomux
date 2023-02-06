@@ -93,7 +93,11 @@ func TestMuxReadNoData(t *testing.T) {
 
 			bytes, tag, err := mux.Read()
 			assert.Nil(t, bytes)
-			assert.Equal(t, "", tag)
+			if network == "unixgram" {
+				assert.Equal(t, "", tag)
+			} else {
+				assert.Equal(t, "a", tag)
+			}
 			// assert error
 		})
 	}
