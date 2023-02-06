@@ -92,19 +92,16 @@ func TestMuxTruncatedRead(t *testing.T) {
 		return nil
 	})
 
-	assert.Equal(t, 6, len(td))
+	assert.Equal(t, 5, len(td))
 	assert.Equal(t, "this is line 1\n", string(td[0].Data))
 	assert.Equal(t, "a", td[0].Tag)
 	assert.Equal(t, "this is line 2\n", string(td[1].Data))
 	assert.Equal(t, "b", td[1].Tag)
 	assert.Equal(t, "this is line 3\n", string(td[2].Data))
 	assert.Equal(t, "a", td[2].Tag)
-	assert.Equal(t, "this is line 5\n", string(td[3].Data))
-	assert.Equal(t, "a", td[3].Tag)
-	assert.Equal(t, "this is line 4", string(td[4].Data))
-	assert.Equal(t, "b", td[4].Tag)
-	assert.Equal(t, "this is line 6\n", string(td[5].Data))
-	assert.Equal(t, "a", td[5].Tag)
+	assert.Equal(t, "this is line 4", string(td[3].Data))
+	assert.Equal(t, "b", td[3].Tag)
+	assert.Equal(t, "this is line 5\nthis is line 6\n", string(td[4].Data))
 }
 
 func skipIfProtocolNotSupported(t *testing.T, err error, network string) {
@@ -139,33 +136,16 @@ func TestMuxMultiple(t *testing.T) {
 				return nil
 			})
 
-			if len(td) == 3 && network != "unixgram" {
-				// not message based
-				assert.Equal(t, 3, len(td))
-				out1 := td[0]
-				assert.Equal(t, "a", out1.Tag)
-				assert.Equal(t, "out1", string(out1.Data))
-				err1 := td[1]
-				assert.Equal(t, "b", err1.Tag)
-				assert.Equal(t, "err1err2", string(err1.Data))
-				out2 := td[2]
-				assert.Equal(t, "c", out2.Tag)
-				assert.Equal(t, "other", string(out2.Data))
-			} else {
-				assert.Equal(t, 4, len(td))
-				out1 := td[0]
-				assert.Equal(t, "a", out1.Tag)
-				assert.Equal(t, "out1", string(out1.Data))
-				err1 := td[1]
-				assert.Equal(t, "b", err1.Tag)
-				assert.Equal(t, "err1", string(err1.Data))
-				err2 := td[2]
-				assert.Equal(t, "b", err2.Tag)
-				assert.Equal(t, "err2", string(err2.Data))
-				out2 := td[3]
-				assert.Equal(t, "c", out2.Tag)
-				assert.Equal(t, "other", string(out2.Data))
-			}
+			assert.Equal(t, 3, len(td))
+			out1 := td[0]
+			assert.Equal(t, "a", out1.Tag)
+			assert.Equal(t, "out1", string(out1.Data))
+			err1 := td[1]
+			assert.Equal(t, "b", err1.Tag)
+			assert.Equal(t, "err1err2", string(err1.Data))
+			out2 := td[2]
+			assert.Equal(t, "c", out2.Tag)
+			assert.Equal(t, "other", string(out2.Data))
 		})
 	}
 }

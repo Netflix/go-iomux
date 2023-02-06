@@ -184,9 +184,6 @@ func (mux *Mux[T]) ReadWhile(waitFn func() error) ([]*TaggedData[T], error) {
 	if err != nil {
 		return nil, err
 	}
-	if mux.network != "unixgram" {
-		return mux.repairTruncatedReads(td), waitErr
-	}
 	return td, waitErr
 }
 
@@ -216,6 +213,14 @@ func (mux *Mux[T]) ReadUntil(done <-chan bool) ([]*TaggedData[T], error) {
 			}
 		} else {
 			lastRead = 0
+			resultLen := len(result)
+			if resultLen > 0 {
+				previous := result[resultLen-1]
+				if previous.Tag == tag {
+					previous.Data = append(previous.Data, data...)
+					continue
+				}
+			}
 			result = append(result, &TaggedData[T]{
 				Data: data,
 				Tag:  tag,
@@ -325,17 +330,28 @@ func (mux *Mux[T]) repairTruncatedReads(taggedData []*TaggedData[T]) []*TaggedDa
 			break
 		}
 	}
-	lineBuffer := make(map[T][]byte)
+	var bufferedData []*TaggedData[T]
 	var result []*TaggedData[T]
 	for i, td := range taggedData {
 		tag := td.Tag
 		data := td.Data
-		if data[len(data)-1] == byte(10) || tagLastIndex[tag] == i {
-			td.Data = append(lineBuffer[tag], data...)
-			result = append(result, td)
-			lineBuffer[tag] = nil
+		bufferLen := len(bufferedData)
+		var currentTag T
+		if bufferLen > 0 {
+			currentTag = bufferedData[0].Tag
 		} else {
-			lineBuffer[tag] = append(lineBuffer[tag], data...)
+			currentTag = tag
+		}
+		lastByteNl := data[len(data)-1] == byte(10)
+		if (lastByteNl && currentTag == tag) || tagLastIndex[tag] == i {
+			for _, bd := range bufferedData {
+				if bd.Tag == tag {
+					td.Data = append(bd.Data, data...)
+				}
+			}
+			result = append(result, td)
+		} else {
+			bufferedData = append(bufferedData, td)
 		}
 	}
 	return result
