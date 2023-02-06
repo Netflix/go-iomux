@@ -132,25 +132,20 @@ func (mux *Mux[T]) Read() ([]byte, T, error) {
 				_ = conn.SetDeadline(time.Now().Add(deadlineDuration))
 				n, addr, err := conn.ReadFrom(buf)
 				td := &TaggedData[T]{err: err}
-				foundTag := false
 				for t, c := range mux.senders {
-					sender := c.LocalAddr().String()
+					localAddr := c.LocalAddr().String()
+					remoteAddr := conn.RemoteAddr()
 					if addr != nil {
-						if addr != nil && addr.String() == sender {
-							foundTag = true
+						if addr.String() == localAddr {
 							td.Tag = t
 							break
 						}
-					} else if conn.RemoteAddr() != nil && conn.RemoteAddr().String() == sender {
-						foundTag = true
+					} else if remoteAddr != nil && remoteAddr.String() == localAddr {
 						td.Tag = t
 						break
 					}
 				}
 				if err == nil {
-					if !foundTag {
-						err = fmt.Errorf("could not find tag for %s", conn.RemoteAddr())
-					}
 					td.Data = make([]byte, n)
 					copy(td.Data, buf[0:n])
 				}
