@@ -13,7 +13,7 @@ import (
 )
 
 // Mux provides a single receive and multiple send ends using unix sockets.
-type Mux[T comparable] struct {
+type mux[T comparable] struct {
 	network   string
 	dir       string
 	recvaddr  *net.UnixAddr
@@ -41,7 +41,7 @@ var (
 const deadlineDuration = 100 * time.Millisecond
 
 // NewMux Create a new Mux using the best connection type for the platform
-func NewMux[T comparable]() (*Mux[T], error) {
+func NewMux[T comparable]() (*mux[T], error) {
 	// Default to the most compatible/reliable network for non-Linux OSes. For instance, unixgram on macOS has a message
 	// limit of 2048 bytes, larger writes fail with:
 	//
@@ -60,21 +60,21 @@ func NewMux[T comparable]() (*Mux[T], error) {
 }
 
 // NewMuxUnix Create a new Mux using 'unix' network.
-func NewMuxUnix[T comparable]() (*Mux[T], error) {
+func NewMuxUnix[T comparable]() (*mux[T], error) {
 	return newMux[T]("unix")
 }
 
 // NewMuxUnixGram Create a new Mux using 'unixgram' network.
-func NewMuxUnixGram[T comparable]() (*Mux[T], error) {
+func NewMuxUnixGram[T comparable]() (*mux[T], error) {
 	return newMux[T]("unixgram")
 }
 
 // NewMuxUnixPacket Create a new Mux using 'unixpacket' network.
-func NewMuxUnixPacket[T comparable]() (*Mux[T], error) {
+func NewMuxUnixPacket[T comparable]() (*mux[T], error) {
 	return newMux[T]("unixpacket")
 }
 
-func newMux[T comparable](network string) (*Mux[T], error) {
+func newMux[T comparable](network string) (*mux[T], error) {
 	dir, err := os.MkdirTemp("", "mux")
 	if err != nil {
 		return nil, err
@@ -84,7 +84,7 @@ func newMux[T comparable](network string) (*Mux[T], error) {
 	if err != nil {
 		return nil, err
 	}
-	mux := &Mux[T]{
+	mux := &mux[T]{
 		network:  network,
 		dir:      dir,
 		recvaddr: recvaddr,
@@ -100,7 +100,7 @@ func newMux[T comparable](network string) (*Mux[T], error) {
 }
 
 // Tag Create a file to receive data tagged with tag T. Returns an *os.File ready for writing.
-func (mux *Mux[T]) Tag(tag T) (*os.File, error) {
+func (mux *mux[T]) Tag(tag T) (*os.File, error) {
 	if mux.closed {
 		return nil, MuxClosed
 	}
@@ -114,7 +114,7 @@ func (mux *Mux[T]) Tag(tag T) (*os.File, error) {
 // Read perform a read. Prefer the convenience functions ReadUtil and ReadWhile. For connection oriented networks, every
 // call to Read concurrently reads all connections, buffering and returning in order received for consecutive calls
 // to Read.
-func (mux *Mux[T]) Read() ([]byte, T, error) {
+func (mux *mux[T]) Read() ([]byte, T, error) {
 	var emptyTag T
 	if mux.closed {
 		return nil, emptyTag, MuxClosed
@@ -162,7 +162,7 @@ func (mux *Mux[T]) Read() ([]byte, T, error) {
 }
 
 // ReadWhile Read until waitFn returns, returning the read data.
-func (mux *Mux[T]) ReadWhile(waitFn func() error) ([]*TaggedData[T], error) {
+func (mux *mux[T]) ReadWhile(waitFn func() error) ([]*TaggedData[T], error) {
 	if mux.closed {
 		return nil, MuxClosed
 	}
@@ -180,7 +180,7 @@ func (mux *Mux[T]) ReadWhile(waitFn func() error) ([]*TaggedData[T], error) {
 }
 
 // ReadUntil Read the receiver until done receives true
-func (mux *Mux[T]) ReadUntil(done <-chan bool) ([]*TaggedData[T], error) {
+func (mux *mux[T]) ReadUntil(done <-chan bool) ([]*TaggedData[T], error) {
 	if mux.closed {
 		return nil, MuxClosed
 	}
@@ -222,7 +222,7 @@ func (mux *Mux[T]) ReadUntil(done <-chan bool) ([]*TaggedData[T], error) {
 	return result, nil
 }
 
-func (mux *Mux[T]) Close() error {
+func (mux *mux[T]) Close() error {
 	if mux.closed {
 		return MuxClosed
 	}
@@ -234,7 +234,7 @@ func (mux *Mux[T]) Close() error {
 	return nil
 }
 
-func (mux *Mux[T]) startListener() error {
+func (mux *mux[T]) startListener() error {
 	// If we got at the underlying poll.FD it would be possible to call recvfrom with MSG_PEEK | MSG_TRUNC to size
 	// the buffer to the current packet, but for now we just set the maximum message size for the OS for message
 	// oriented unixgram, because the message truncates if it exceeds the buffer, and a modest read buffer otherwise.
@@ -288,7 +288,7 @@ func (mux *Mux[T]) startListener() error {
 	return nil
 }
 
-func (mux *Mux[T]) createSender(tag T) (*os.File, error) {
+func (mux *mux[T]) createSender(tag T) (*os.File, error) {
 	num := len(mux.senders) + 1
 	if _, ok := mux.senders[tag]; !ok {
 		address := filepath.Join(mux.dir, fmt.Sprintf("send_%d.sock", num))
