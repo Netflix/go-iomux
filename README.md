@@ -24,7 +24,7 @@ This module was inspired by Josh Triplett's Rust crate https://github.com/joshtr
 
 ## Limitations
 
-On Linux, the network defaults to `unixgram`. On other platforms `unix` is used by default as it's the least likely to have unexpected issues(see 'macOS' below). Because `unix` is connection oriented it doesn't come with the ordering guarantees of `unixgram`, so may see writes out of order, but in our testing the tolerance is under one millisecond, so for real world use cases, this is unlikely to be a concern. 
+On all platforms except macOS the network defaults to `unixgram`. On macOS `unix` is a safer default (see below), but is connection oriented, so it doesn't come with the ordering guarantees of `unixgram`. It's possible to see see writes out of order, but on a MacBook Pro M1 0.1ms is the threshold for writes being read out of order, so for real world use cases this is unlikely to be a problem. 
 
 These limitations do not affect the read order of an individual connection, so output for an individual tag is always consistent, and the network type can be overridden using the convenience constructors `NewMuxUnix`, `NewMuxUnixGram` and `NewMuxUnixPacket`.
 
@@ -35,4 +35,4 @@ These limitations do not affect the read order of an individual connection, so o
 write /dev/stdout: message too long
 ```
 
-That makes it unsuitable when you canno control the write size of the sender. Another symptom of this is children of children processes failing with `write /dev/stdout: broken pipe`.
+That makes it unsuitable when you cannot control the write size of the sender, which rules out just about any usage with `exec.Cmd`. Another symptom of this is children of children processes failing with `write /dev/stdout: broken pipe`.

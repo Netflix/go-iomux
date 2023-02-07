@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-// Mux provides a single receive and multiple send ends using unix sockets.
+// Mux provides a single receive and multiple send ends using unix domain networking.
 type Mux[T comparable] struct {
 	network   string
 	dir       string
@@ -91,9 +91,9 @@ func (mux *Mux[T]) Tag(tag T) (*os.File, error) {
 	return sender, nil
 }
 
-// Read perform a read, blocking until ctx.Done. For connection oriented networks, Read concurrently reads all
-// connections buffering in order received for consecutive calls to Read. Returns io.EOF error when there is no data
-// remaining to be read.
+// Read perform a read, blocking until data is available or ctx.Done. For connection oriented networks, Read
+// concurrently reads all connections buffering in order received for consecutive calls to Read. Returns io.EOF error
+// when there is no data remaining to be read.
 func (mux *Mux[T]) Read(ctx context.Context) ([]byte, T, error) {
 	var emptyTag T
 	if mux.closed {
@@ -254,6 +254,7 @@ func (mux *Mux[T]) ReadUntil(ctx context.Context) ([]*TaggedData[T], error) {
 	}
 }
 
+// Close closes the Mux, closing connections and removing temporary files. Prevents reuse.
 func (mux *Mux[T]) Close() error {
 	if mux.closed {
 		return MuxClosed
@@ -270,10 +271,10 @@ func (mux *Mux[T]) createReceiver() (e error) {
 	mux.recvonce.Do(func() {
 		if mux.network == "" {
 			switch runtime.GOOS {
-			case "linux":
-				mux.network = "unixgram"
-			default:
+			case "darwin":
 				mux.network = "unix"
+			default:
+				mux.network = "unixgram"
 			}
 		}
 

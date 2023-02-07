@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"github.com/stretchr/testify/assert"
 	"golang.org/x/sys/unix"
 	"io"
@@ -17,6 +18,9 @@ var networks = []string{
 	"unix", "unixgram", "unixpacket",
 }
 
+const sleepSecs = 0.0001
+const sleepDuration = time.Duration(sleepSecs * float64(time.Second))
+
 func TestMuxRead(t *testing.T) {
 	for _, network := range networks {
 		t.Run(network, func(t *testing.T) {
@@ -26,7 +30,7 @@ func TestMuxRead(t *testing.T) {
 			})
 			taga, err := mux.Tag("a")
 			if err != nil {
-				skipIfProtocolNotSupported(t, err, network)
+				skipIfProtocolNotSupported(t, err)
 				assert.Nil(t, err)
 			}
 			assert.Nil(t, err)
@@ -86,7 +90,7 @@ func TestMuxReadNoData(t *testing.T) {
 			})
 			_, err := mux.Tag("a")
 			if err != nil {
-				skipIfProtocolNotSupported(t, err, network)
+				skipIfProtocolNotSupported(t, err)
 				assert.Nil(t, err)
 			}
 
@@ -160,10 +164,10 @@ func TestMuxTruncatedRead(t *testing.T) {
 	tagb, _ := mux.Tag("b")
 
 	td, err := mux.ReadWhile(func() error {
-		binary.Write(taga, binary.BigEndian, make([]byte, 256)) // Double the receive buffer size
-		time.Sleep(1 * time.Millisecond)                        // Some slack for connection oriented networks
+		binary.Write(taga, binary.BigEndian, make([]byte, 256))
+		time.Sleep(sleepDuration)
 		binary.Write(tagb, binary.BigEndian, make([]byte, 10))
-		time.Sleep(1 * time.Millisecond)
+		time.Sleep(sleepDuration)
 		binary.Write(taga, binary.BigEndian, make([]byte, 20))
 		return nil
 	})
@@ -177,7 +181,7 @@ func TestMuxTruncatedRead(t *testing.T) {
 	assert.Equal(t, "a", td[2].Tag)
 }
 
-func skipIfProtocolNotSupported(t *testing.T, err error, network string) {
+func skipIfProtocolNotSupported(t *testing.T, err error) {
 	err = errors.Unwrap(err)
 	if sys, ok := err.(*os.SyscallError); ok {
 		if sys.Syscall == "socket" {
@@ -198,7 +202,7 @@ func TestMuxMultiple(t *testing.T) {
 			})
 			taga, err := mux.Tag("a")
 			if err != nil {
-				skipIfProtocolNotSupported(t, err, network)
+				skipIfProtocolNotSupported(t, err)
 				assert.Nil(t, err)
 			}
 			tagb, _ := mux.Tag("b")
@@ -207,10 +211,10 @@ func TestMuxMultiple(t *testing.T) {
 
 			td, err := mux.ReadWhile(func() error {
 				io.WriteString(taga, "out1")
-				time.Sleep(1 * time.Millisecond)
+				time.Sleep(sleepDuration)
 				io.WriteString(tagb, "err1")
 				io.WriteString(tagb, "err2")
-				time.Sleep(1 * time.Millisecond)
+				time.Sleep(sleepDuration)
 				io.WriteString(tagc, "other")
 				return nil
 			})
@@ -237,10 +241,11 @@ func TestMuxCmd(t *testing.T) {
 				mux.Close()
 			})
 			// sleep to avoid racing on connection oriented networks
-			cmd := exec.Command("sh", "-c", "echo out1 && sleep 0.1 && echo err1 1>&2 && sleep 0.1 && echo out2")
+			echo := fmt.Sprintf("echo out1 && sleep %f && echo err1 1>&2 && sleep %f && echo out2", sleepSecs, sleepSecs)
+			cmd := exec.Command("sh", "-c", echo)
 			stdout, err := mux.Tag(0)
 			if err != nil {
-				skipIfProtocolNotSupported(t, err, network)
+				skipIfProtocolNotSupported(t, err)
 				assert.Nil(t, err)
 			}
 			stderr, _ := mux.Tag(1)
