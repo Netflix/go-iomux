@@ -1,6 +1,6 @@
 # iomux
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/Netflix/go-iomux.svg)](https://pkg.go.dev/github.com/Netflix/go-iomux)
+[![Go Reference](https://pkg.go.dev/badge/github.com/netflix/go-iomux.svg)](https://pkg.go.dev/github.com/netflix/go-iomux)
 
 iomux allows multiplexing of file descriptors using any Go supported unix domain network. It makes it possible to distinctly capture `exec.Cmd` stdout/stderr keeping the original output order:
 
