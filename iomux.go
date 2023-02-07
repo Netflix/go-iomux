@@ -95,15 +95,15 @@ func (mux *Mux[T]) Tag(tag T) (*os.File, error) {
 // concurrently reads all connections buffering in order received for consecutive calls to Read. Returns io.EOF error
 // when there is no data remaining to be read.
 func (mux *Mux[T]) Read(ctx context.Context) ([]byte, T, error) {
-	var emptyTag T
+	var zeroTag T
 	if mux.closed {
-		return nil, emptyTag, MuxClosed
+		return nil, zeroTag, MuxClosed
 	}
 	if len(mux.recvconns) == 0 {
-		return nil, emptyTag, MuxNoConnections
+		return nil, zeroTag, MuxNoConnections
 	}
 
-	if mux.network == "unixgram" {
+	if len(mux.recvconns) == 1 {
 		return mux.read(ctx, mux.recvconns[0], mux.recvbufs[0])
 	}
 
@@ -144,7 +144,7 @@ func (mux *Mux[T]) Read(ctx context.Context) ([]byte, T, error) {
 					mux.recvstate[key].eof = true
 					continue
 				}
-				return nil, td.tag, td.err
+				return nil, zeroTag, td.err
 			}
 			return td.data, td.tag, td.err
 		case <-ctx.Done():
@@ -164,7 +164,7 @@ func (mux *Mux[T]) Read(ctx context.Context) ([]byte, T, error) {
 					key := recvKey{ctx: ctx, conn: c}
 					delete(mux.recvstate, key)
 				}
-				return nil, emptyTag, io.EOF
+				return nil, zeroTag, io.EOF
 			}
 		default:
 		}
@@ -173,6 +173,7 @@ func (mux *Mux[T]) Read(ctx context.Context) ([]byte, T, error) {
 }
 
 func (mux *Mux[T]) read(ctx context.Context, conn *net.UnixConn, buf []byte) ([]byte, T, error) {
+	var zeroTag T
 	for {
 		_ = conn.SetDeadline(time.Now().Add(deadlineDuration))
 		n, addr, err := conn.ReadFrom(buf)
@@ -192,11 +193,11 @@ func (mux *Mux[T]) read(ctx context.Context, conn *net.UnixConn, buf []byte) ([]
 		}
 		if err != nil {
 			if errors.Unwrap(err) != os.ErrDeadlineExceeded {
-				return nil, tag, err
+				return nil, zeroTag, err
 			}
 			select {
 			case <-ctx.Done():
-				return nil, tag, io.EOF
+				return nil, zeroTag, io.EOF
 			default:
 				continue
 			}
