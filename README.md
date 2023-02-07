@@ -24,15 +24,13 @@ This module was inspired by Josh Triplett's Rust crate https://github.com/joshtr
 
 ## Limitations
 
-On all platforms except macOS the network defaults to `unixgram`. On macOS `unix` is a safer default (see below), but is connection oriented, so it doesn't come with the ordering guarantees of `unixgram`. It's possible to see see writes out of order, but on a MacBook Pro M1 0.1ms is the threshold for writes being read out of order, so for real world use cases this is unlikely to be a problem. 
+On all platforms except macOS the network defaults to `unixgram`. On Linux, `unixgram` behaves like a pipe and will behave exactly as you'd expect, and always see messages in order. On other UNIXes, there is a possibility of different behaviour when [buffers are full](https://docs.rs/io-mux/latest/io_mux/#portability), but it's unlikely a reader will be outpaced.
 
-These limitations do not affect the read order of an individual connection, so output for an individual tag is always consistent, and the network type can be overridden using the convenience constructors `NewMuxUnix`, `NewMuxUnixGram` and `NewMuxUnixPacket`.
-
-### macOS
-
-`unixgram` is particularly problematic on macOS, because there is a message limit of 2048 bytes. Larger writes fail with:
+Using `unixgram` on macOS when you cannot control the write size of the sender, which rules out just about any usage with `exec.Cmd`, is impossible due a message size limit of 2048 bytes:
 ```
 write /dev/stdout: message too long
 ```
 
-That makes it unsuitable when you cannot control the write size of the sender, which rules out just about any usage with `exec.Cmd`. Another symptom of this is children of children processes failing with `write /dev/stdout: broken pipe`.
+So on macOs, the default network is `unix`. It is connection oriented, so it doesn't come with the ordering guarantees of `unixgram`. It's possible to see see writes out of order, but on a MacBook Pro M1 0.1ms is the threshold for writes being read out of order, so for real world use cases it's unlikely to be a problem.
+
+These limitations do not affect the read order of an individual connection, so output for an individual tag is always consistent. If you prefer a different network type, the default can be overridden using the convenience constructors `NewMuxUnix`, `NewMuxUnixGram` and `NewMuxUnixPacket`.
