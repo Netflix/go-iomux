@@ -5,26 +5,19 @@ iomux allows multiplexing of file descriptors using any Go supported unix domain
 The primary use case is for multiplexing `exec.Cmd` stdout/stderr keeping the original output order:
 
 ```
-        mux, _ := iomux.NewMux[OutputType]() // ignore errors for brevity
-        defer mux.Close()
-        cmd := exec.Command("sh", "-c", "echo out1 && echo err1 1>&2 && echo out2")
-        stdout, _ := mux.Tag(0)
-        stderr, _ := mux.Tag(1)
-        cmd.Stdout = stdout
-        cmd.Stderr = stderr
-        taggedData, _ := mux.ReadWhile(func() error {
-                return cmd.Run()
-        })
-        for _, td := range taggedData {
-                var w io.Writer
-                switch td.Tag {
-                case 0:
-                        w = os.Stdout
-                case 1:
-                        w = os.Stderr
-                }
-                binary.Write(w, binary.BigEndian, td.Data)
-        }
+	mux := &iomux.Mux[OutputType]{}
+	defer mux.Close()
+	cmd := exec.Command("sh", "-c", "echo out1 && echo err1 1>&2 && echo out2")
+	stdout, err := mux.Tag(StdOut)
+	if err != nil {
+		panic(err)
+	}
+	stderr, _ := mux.Tag(StdErr)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
+	taggedData, err := mux.ReadWhile(func() error {
+		return cmd.Run()
+	})
 ```
 
 For more, see the [examples](examples) directory.

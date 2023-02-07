@@ -1,6 +1,7 @@
 package iomux
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -13,14 +14,16 @@ import (
 )
 
 // Mux provides a single receive and multiple send ends using unix sockets.
-type mux[T comparable] struct {
+type Mux[T comparable] struct {
 	network   string
 	dir       string
+	recvonce  sync.Once
 	recvaddr  *net.UnixAddr
 	recvconns []*net.UnixConn
 	recvbufs  [][]byte
-	recvchan  chan *TaggedData[T]
+	recvchan  chan *taggedData[T]
 	recvmutex []sync.Mutex
+	recvstate map[recvKey]*recvState
 	acceptFn  func() error
 	senders   map[T]*net.UnixConn
 	closed    bool
@@ -30,7 +33,22 @@ type mux[T comparable] struct {
 type TaggedData[T comparable] struct {
 	Tag  T
 	Data []byte
+}
+
+type taggedData[T comparable] struct {
+	tag  T
+	data []byte
+	conn *net.UnixConn
 	err  error
+}
+
+type recvKey struct {
+	ctx  context.Context
+	conn *net.UnixConn
+}
+
+type recvState struct {
+	eof bool
 }
 
 var (
@@ -40,69 +58,31 @@ var (
 
 const deadlineDuration = 100 * time.Millisecond
 
-// NewMux Create a new Mux using the best connection type for the platform
-func NewMux[T comparable]() (*mux[T], error) {
-	// Default to the most compatible/reliable network for non-Linux OSes. For instance, unixgram on macOS has a message
-	// limit of 2048 bytes, larger writes fail with:
-	//
-	//	write /dev/stdout: message too long
-	//
-	// That makes it unsuitable when you can't control the write size of the sender. Another symptom of this is children
-	// of children processes failing with `write /dev/stdout: broken pipe`.
-	//
-	// The non-message based networks don't come with the strong ordering guarantees as unixgram, but are suitable for
-	// the kind of applications this will be used for.
-	network := "unix"
-	if runtime.GOOS == "linux" {
-		network = "unixgram"
-	}
-	return newMux[T](network)
-}
-
 // NewMuxUnix Create a new Mux using 'unix' network.
-func NewMuxUnix[T comparable]() (*mux[T], error) {
-	return newMux[T]("unix")
+func NewMuxUnix[T comparable]() *Mux[T] {
+	return &Mux[T]{network: "unix"}
 }
 
 // NewMuxUnixGram Create a new Mux using 'unixgram' network.
-func NewMuxUnixGram[T comparable]() (*mux[T], error) {
-	return newMux[T]("unixgram")
+func NewMuxUnixGram[T comparable]() *Mux[T] {
+	return &Mux[T]{network: "unixgram"}
 }
 
 // NewMuxUnixPacket Create a new Mux using 'unixpacket' network.
-func NewMuxUnixPacket[T comparable]() (*mux[T], error) {
-	return newMux[T]("unixpacket")
+func NewMuxUnixPacket[T comparable]() *Mux[T] {
+	return &Mux[T]{network: "unixpacket"}
 }
 
-func newMux[T comparable](network string) (*mux[T], error) {
-	dir, err := os.MkdirTemp("", "mux")
-	if err != nil {
-		return nil, err
-	}
-	file := filepath.Join(dir, "recv.sock")
-	recvaddr, err := net.ResolveUnixAddr(network, file)
-	if err != nil {
-		return nil, err
-	}
-	mux := &mux[T]{
-		network:  network,
-		dir:      dir,
-		recvaddr: recvaddr,
-		recvchan: make(chan *TaggedData[T], 10),
-		acceptFn: func() error { return nil },
-		senders:  make(map[T]*net.UnixConn),
-	}
-	err = mux.startListener()
-	if err != nil {
-		return nil, err
-	}
-	return mux, nil
-}
-
-// Tag Create a file to receive data tagged with tag T. Returns an *os.File ready for writing.
-func (mux *mux[T]) Tag(tag T) (*os.File, error) {
+// Tag Create a file to receive data tagged with tag T. Returns an *os.File ready for writing, or an error. If an error
+// occurs when creating the receive end of the connection, the Mux will be closed.
+func (mux *Mux[T]) Tag(tag T) (*os.File, error) {
 	if mux.closed {
 		return nil, MuxClosed
+	}
+	err := mux.createReceiver()
+	if err != nil {
+		mux.Close()
+		return nil, err
 	}
 	sender, err := mux.createSender(tag)
 	if err != nil {
@@ -111,10 +91,10 @@ func (mux *mux[T]) Tag(tag T) (*os.File, error) {
 	return sender, nil
 }
 
-// Read perform a read. Prefer the convenience functions ReadUtil and ReadWhile. For connection oriented networks, every
-// call to Read concurrently reads all connections, buffering and returning in order received for consecutive calls
-// to Read.
-func (mux *mux[T]) Read() ([]byte, T, error) {
+// Read perform a read, blocking until ctx.Done. For connection oriented networks, Read concurrently reads all
+// connections buffering in order received for consecutive calls to Read. Returns io.EOF error when there is no data
+// remaining to be read.
+func (mux *Mux[T]) Read(ctx context.Context) ([]byte, T, error) {
 	var emptyTag T
 	if mux.closed {
 		return nil, emptyTag, MuxClosed
@@ -123,56 +103,122 @@ func (mux *mux[T]) Read() ([]byte, T, error) {
 		return nil, emptyTag, MuxNoConnections
 	}
 
+	if mux.network == "unixgram" {
+		return mux.read(ctx, mux.recvconns[0], mux.recvbufs[0])
+	}
+
+	if mux.recvstate == nil {
+		mux.recvstate = make(map[recvKey]*recvState)
+	}
 	for i, c := range mux.recvconns {
+		key := recvKey{ctx: ctx, conn: c}
+		if _, ok := mux.recvstate[key]; !ok {
+			mux.recvstate[key] = &recvState{}
+		} else if mux.recvstate[key].eof {
+			// avoid spinning up another read, we're done
+			continue
+		}
 		conn := c
 		buf := mux.recvbufs[i]
 		mutex := &mux.recvmutex[i]
 		if mutex.TryLock() {
 			go func() {
-				_ = conn.SetDeadline(time.Now().Add(deadlineDuration))
-				n, addr, err := conn.ReadFrom(buf)
-				td := &TaggedData[T]{err: err}
-				for t, c := range mux.senders {
-					localAddr := c.LocalAddr().String()
-					remoteAddr := conn.RemoteAddr()
-					if addr != nil {
-						if addr.String() == localAddr {
-							td.Tag = t
-							break
-						}
-					} else if remoteAddr != nil && remoteAddr.String() == localAddr {
-						td.Tag = t
-						break
-					}
+				data, tag, err := mux.read(ctx, conn, buf)
+				mux.recvchan <- &taggedData[T]{
+					data: data,
+					tag:  tag,
+					conn: conn,
+					err:  err,
 				}
-				if err == nil {
-					td.Data = make([]byte, n)
-					copy(td.Data, buf[0:n])
-				}
-				mux.recvchan <- td
 				mutex.Unlock()
 			}()
 		}
 	}
-	td := <-mux.recvchan
-	if td.err != nil {
-		return nil, td.Tag, td.err
+
+	for {
+		select {
+		case td := <-mux.recvchan:
+			if td.err != nil {
+				if td.err == io.EOF {
+					key := recvKey{ctx: ctx, conn: td.conn}
+					mux.recvstate[key].eof = true
+					continue
+				}
+				return nil, td.tag, td.err
+			}
+			return td.data, td.tag, td.err
+		case <-ctx.Done():
+			done := true
+			for _, c := range mux.recvconns {
+				key := recvKey{ctx: ctx, conn: c}
+				if state, ok := mux.recvstate[key]; ok {
+					if !state.eof {
+						done = false
+					}
+				} else {
+					panic("no state")
+				}
+			}
+			if done {
+				for _, c := range mux.recvconns {
+					key := recvKey{ctx: ctx, conn: c}
+					delete(mux.recvstate, key)
+				}
+				return nil, emptyTag, io.EOF
+			}
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	return td.Data, td.Tag, td.err
+}
+
+func (mux *Mux[T]) read(ctx context.Context, conn *net.UnixConn, buf []byte) ([]byte, T, error) {
+	for {
+		_ = conn.SetDeadline(time.Now().Add(deadlineDuration))
+		n, addr, err := conn.ReadFrom(buf)
+		var tag T
+		for t, c := range mux.senders {
+			localAddr := c.LocalAddr().String()
+			remoteAddr := conn.RemoteAddr()
+			if addr != nil {
+				if addr.String() == localAddr {
+					tag = t
+					break
+				}
+			} else if remoteAddr != nil && remoteAddr.String() == localAddr {
+				tag = t
+				break
+			}
+		}
+		if err != nil {
+			if errors.Unwrap(err) != os.ErrDeadlineExceeded {
+				return nil, tag, err
+			}
+			select {
+			case <-ctx.Done():
+				return nil, tag, io.EOF
+			default:
+				continue
+			}
+		}
+		data := make([]byte, n)
+		copy(data, buf[0:n])
+		return data, tag, nil
+	}
 }
 
 // ReadWhile Read until waitFn returns, returning the read data.
-func (mux *mux[T]) ReadWhile(waitFn func() error) ([]*TaggedData[T], error) {
+func (mux *Mux[T]) ReadWhile(waitFn func() error) ([]*TaggedData[T], error) {
 	if mux.closed {
 		return nil, MuxClosed
 	}
-	done := make(chan bool)
+	ctx, cancelFn := context.WithCancel(context.Background())
 	var waitErr error
 	go func() {
 		waitErr = waitFn()
-		done <- true
+		cancelFn()
 	}()
-	td, err := mux.ReadUntil(done)
+	td, err := mux.ReadUntil(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -180,49 +226,35 @@ func (mux *mux[T]) ReadWhile(waitFn func() error) ([]*TaggedData[T], error) {
 }
 
 // ReadUntil Read the receiver until done receives true
-func (mux *mux[T]) ReadUntil(done <-chan bool) ([]*TaggedData[T], error) {
+func (mux *Mux[T]) ReadUntil(ctx context.Context) ([]*TaggedData[T], error) {
 	if mux.closed {
 		return nil, MuxClosed
 	}
 	var result []*TaggedData[T]
-	callerDone := false
-	lastRead := 0
 	for {
-		select {
-		case callerDone = <-done:
-		default:
-		}
-		data, tag, err := mux.Read()
+		data, tag, err := mux.Read(ctx)
 		if err != nil {
-			if errors.Unwrap(err) != os.ErrDeadlineExceeded {
-				return nil, err
-			} else if callerDone {
-				// lastRead isn't required for unixgram, but we have one connection per tag for other network types
-				lastRead++
-				if lastRead >= len(mux.recvconns) {
-					break
-				}
+			if err == io.EOF {
+				return result, nil
 			}
-		} else {
-			lastRead = 0
-			resultLen := len(result)
-			if resultLen > 0 {
-				previous := result[resultLen-1]
-				if previous.Tag == tag {
-					previous.Data = append(previous.Data, data...)
-					continue
-				}
-			}
-			result = append(result, &TaggedData[T]{
-				Data: data,
-				Tag:  tag,
-			})
+			return nil, err
 		}
+		resultLen := len(result)
+		if resultLen > 0 {
+			previous := result[resultLen-1]
+			if previous.Tag == tag {
+				previous.Data = append(previous.Data, data...)
+				continue
+			}
+		}
+		result = append(result, &TaggedData[T]{
+			Data: data,
+			Tag:  tag,
+		})
 	}
-	return result, nil
 }
 
-func (mux *mux[T]) Close() error {
+func (mux *Mux[T]) Close() error {
 	if mux.closed {
 		return MuxClosed
 	}
@@ -234,7 +266,36 @@ func (mux *mux[T]) Close() error {
 	return nil
 }
 
-func (mux *mux[T]) startListener() error {
+func (mux *Mux[T]) createReceiver() (e error) {
+	mux.recvonce.Do(func() {
+		if mux.network == "" {
+			switch runtime.GOOS {
+			case "linux":
+				mux.network = "unixgram"
+			default:
+				mux.network = "unix"
+			}
+		}
+
+		mux.dir, e = os.MkdirTemp("", "mux")
+		if e != nil {
+			return
+		}
+		file := filepath.Join(mux.dir, "recv.sock")
+		mux.recvaddr, e = net.ResolveUnixAddr(mux.network, file)
+		if e != nil {
+			return
+		}
+		mux.recvchan = make(chan *taggedData[T], 10)
+		e = mux.startListener()
+		if e != nil {
+			return
+		}
+	})
+	return
+}
+
+func (mux *Mux[T]) startListener() error {
 	// If we got at the underlying poll.FD it would be possible to call recvfrom with MSG_PEEK | MSG_TRUNC to size
 	// the buffer to the current packet, but for now we just set the maximum message size for the OS for message
 	// oriented unixgram, because the message truncates if it exceeds the buffer, and a modest read buffer otherwise.
@@ -253,6 +314,9 @@ func (mux *mux[T]) startListener() error {
 				return err
 			}
 			mux.closers = append(mux.closers, conn)
+			mux.acceptFn = func() error {
+				return nil
+			}
 			_ = conn.CloseWrite()
 			mux.recvconns = append(mux.recvconns, conn)
 			mux.recvbufs = append(mux.recvbufs, make([]byte, bufsize))
@@ -288,7 +352,10 @@ func (mux *mux[T]) startListener() error {
 	return nil
 }
 
-func (mux *mux[T]) createSender(tag T) (*os.File, error) {
+func (mux *Mux[T]) createSender(tag T) (*os.File, error) {
+	if mux.senders == nil {
+		mux.senders = make(map[T]*net.UnixConn)
+	}
 	num := len(mux.senders) + 1
 	if _, ok := mux.senders[tag]; !ok {
 		address := filepath.Join(mux.dir, fmt.Sprintf("send_%d.sock", num))

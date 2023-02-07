@@ -1,6 +1,7 @@
 package iomux
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"github.com/stretchr/testify/assert"
@@ -16,10 +17,129 @@ var networks = []string{
 	"unix", "unixgram", "unixpacket",
 }
 
-func TestMuxReadWhileErr(t *testing.T) {
-	mux, err := NewMux[string]()
+func TestMuxRead(t *testing.T) {
+	for _, network := range networks {
+		t.Run(network, func(t *testing.T) {
+			mux := &Mux[string]{network: network}
+			t.Cleanup(func() {
+				mux.Close()
+			})
+			taga, err := mux.Tag("a")
+			if err != nil {
+				skipIfProtocolNotSupported(t, err, network)
+				assert.Nil(t, err)
+			}
+			assert.Nil(t, err)
+			tagb, _ := mux.Tag("b")
+			assert.Nil(t, err)
+
+			ctx, cancelFn := context.WithCancel(context.Background())
+			io.WriteString(taga, "hello taga")
+			bytes, tag, err := mux.Read(ctx)
+			assert.Nil(t, err)
+			assert.Equal(t, "a", tag)
+			assert.Equal(t, "hello taga", string(bytes))
+
+			io.WriteString(tagb, "hello tagb")
+			bytes, tag, err = mux.Read(ctx)
+			assert.Nil(t, err)
+			assert.Equal(t, "b", tag)
+			assert.Equal(t, "hello tagb", string(bytes))
+
+			cancelFn()
+			bytes, tag, err = mux.Read(ctx)
+			assert.Equal(t, io.EOF, err)
+		})
+	}
+}
+
+func TestMuxReadNoSenders(t *testing.T) {
+	mux := &Mux[string]{}
+	t.Cleanup(func() {
+		mux.Close()
+	})
+	ctx := context.Background()
+	ctx.Done()
+	data, tag, err := mux.Read(ctx)
+
+	assert.Nil(t, data)
+	assert.Equal(t, "", tag)
+	assert.ErrorIs(t, err, MuxNoConnections)
+}
+
+func TestMuxReadClosed(t *testing.T) {
+	mux := &Mux[string]{}
+	mux.Close()
+	ctx := context.Background()
+	ctx.Done()
+	_, _, err := mux.Read(ctx)
+
+	assert.ErrorIs(t, err, MuxClosed)
+}
+
+func TestMuxReadNoData(t *testing.T) {
+	for _, network := range networks {
+		t.Run(network, func(t *testing.T) {
+			mux := &Mux[string]{network: network}
+			t.Cleanup(func() {
+				mux.Close()
+			})
+			_, err := mux.Tag("a")
+			if err != nil {
+				skipIfProtocolNotSupported(t, err, network)
+				assert.Nil(t, err)
+			}
+
+			ctx, cancelFn := context.WithCancel(context.Background())
+			cancelFn()
+			bytes, tag, err := mux.Read(ctx)
+			assert.Nil(t, bytes)
+			assert.Equal(t, "", tag)
+			assert.Equal(t, io.EOF, err)
+		})
+	}
+}
+
+func TestMuxMultipleContexts(t *testing.T) {
+	mux := &Mux[string]{}
+	t.Cleanup(func() {
+		mux.Close()
+	})
+	taga, err := mux.Tag("a")
 	assert.Nil(t, err)
-	_, err = mux.Tag("a")
+	tagb, _ := mux.Tag("b")
+
+	ctx1, cancelFn1 := context.WithCancel(context.Background())
+	io.WriteString(taga, "hello taga")
+	bytes, tag, err := mux.Read(ctx1)
+	assert.Nil(t, err)
+	assert.Equal(t, "a", tag)
+	assert.Equal(t, "hello taga", string(bytes))
+
+	ctx2, cancelFn2 := context.WithCancel(context.Background())
+	io.WriteString(tagb, "hello tagb")
+	bytes, tag, err = mux.Read(ctx2)
+	assert.Nil(t, err)
+	assert.Equal(t, "b", tag)
+	assert.Equal(t, "hello tagb", string(bytes))
+
+	cancelFn2()
+	bytes, tag, err = mux.Read(ctx2)
+	assert.Equal(t, io.EOF, err)
+
+	cancelFn1()
+	bytes, tag, err = mux.Read(ctx1)
+	assert.Equal(t, io.EOF, err)
+
+	assert.Empty(t, mux.recvstate)
+}
+
+func TestMuxReadWhileErr(t *testing.T) {
+	mux := &Mux[string]{}
+	t.Cleanup(func() {
+		mux.Close()
+	})
+	_, err := mux.Tag("a")
 	assert.Nil(t, err)
 
 	expected := errors.New("this is an error")
@@ -30,90 +150,18 @@ func TestMuxReadWhileErr(t *testing.T) {
 	assert.ErrorIs(t, expected, err)
 }
 
-func TestMuxReadNoSenders(t *testing.T) {
-	mux, err := NewMux[string]()
-	assert.Nil(t, err)
-
-	data, tag, err := mux.Read()
-
-	assert.Nil(t, data)
-	assert.Equal(t, "", tag)
-	assert.ErrorIs(t, err, MuxNoConnections)
-}
-
-func TestMuxReadClosed(t *testing.T) {
-	mux, _ := NewMux[string]()
-	mux.Close()
-	_, _, err := mux.Read()
-
-	assert.ErrorIs(t, err, MuxClosed)
-}
-
-func TestMuxRead(t *testing.T) {
-	for _, network := range networks {
-		t.Run(network, func(t *testing.T) {
-			mux, err := newMux[string](network)
-			if err != nil {
-				skipIfProtocolNotSupported(t, err, network)
-				assert.Nil(t, err)
-			}
-
-			taga, _ := mux.Tag("a")
-			assert.Nil(t, err)
-			tagb, _ := mux.Tag("b")
-			assert.Nil(t, err)
-
-			io.WriteString(taga, "hello taga")
-			bytes, tag, err := mux.Read()
-			assert.Nil(t, err)
-			assert.Equal(t, "a", tag)
-			assert.Equal(t, "hello taga", string(bytes))
-
-			io.WriteString(tagb, "hello tagb")
-			bytes, tag, err = mux.Read()
-			assert.Nil(t, err)
-			assert.Equal(t, "b", tag)
-			assert.Equal(t, "hello tagb", string(bytes))
-
-			bytes, tag, err = mux.Read()
-			assert.ErrorIs(t, errors.Unwrap(err), os.ErrDeadlineExceeded)
-		})
-	}
-}
-
-func TestMuxReadNoData(t *testing.T) {
-	for _, network := range networks {
-		t.Run(network, func(t *testing.T) {
-			mux, err := newMux[string](network)
-			if err != nil {
-				skipIfProtocolNotSupported(t, err, network)
-				assert.Nil(t, err)
-			}
-
-			mux.Tag("a")
-
-			bytes, tag, err := mux.Read()
-			assert.Nil(t, bytes)
-			if network == "unixgram" {
-				assert.Equal(t, "", tag)
-			} else {
-				assert.Equal(t, "a", tag)
-			}
-			// assert error
-		})
-	}
-}
-
 func TestMuxTruncatedRead(t *testing.T) {
-	mux, err := NewMuxUnix[string]()
+	mux := NewMuxUnix[string]()
+	t.Cleanup(func() {
+		mux.Close()
+	})
+	taga, err := mux.Tag("a")
 	assert.Nil(t, err)
-	taga, _ := mux.Tag("a")
 	tagb, _ := mux.Tag("b")
-	assert.Nil(t, err)
 
 	td, err := mux.ReadWhile(func() error {
 		binary.Write(taga, binary.BigEndian, make([]byte, 256)) // Double the receive buffer size
-		time.Sleep(1 * time.Millisecond)
+		time.Sleep(1 * time.Millisecond)                        // Some slack for connection oriented networks
 		binary.Write(tagb, binary.BigEndian, make([]byte, 10))
 		time.Sleep(1 * time.Millisecond)
 		binary.Write(taga, binary.BigEndian, make([]byte, 20))
@@ -144,11 +192,15 @@ func skipIfProtocolNotSupported(t *testing.T, err error, network string) {
 func TestMuxMultiple(t *testing.T) {
 	for _, network := range networks {
 		t.Run(network, func(t *testing.T) {
-			mux, err := newMux[string](network)
+			mux := &Mux[string]{network: network}
+			t.Cleanup(func() {
+				mux.Close()
+			})
+			taga, err := mux.Tag("a")
 			if err != nil {
 				skipIfProtocolNotSupported(t, err, network)
+				assert.Nil(t, err)
 			}
-			taga, _ := mux.Tag("a")
 			tagb, _ := mux.Tag("b")
 			tagc, _ := mux.Tag("c")
 			assert.Nil(t, err)
@@ -180,13 +232,17 @@ func TestMuxMultiple(t *testing.T) {
 func TestMuxCmd(t *testing.T) {
 	for _, network := range networks {
 		t.Run(network, func(t *testing.T) {
-			mux, err := newMux[int](network)
+			mux := &Mux[int]{network: network}
+			t.Cleanup(func() {
+				mux.Close()
+			})
+			// sleep to avoid racing on connection oriented networks
+			cmd := exec.Command("sh", "-c", "echo out1 && sleep 0.1 && echo err1 1>&2 && sleep 0.1 && echo out2")
+			stdout, err := mux.Tag(0)
 			if err != nil {
 				skipIfProtocolNotSupported(t, err, network)
+				assert.Nil(t, err)
 			}
-			// sleeps to avoid racing on connection oriented networks
-			cmd := exec.Command("sh", "-c", "echo out1 && sleep 0.1 && echo err1 1>&2 && sleep 0.1 && echo out2")
-			stdout, _ := mux.Tag(0)
 			stderr, _ := mux.Tag(1)
 			cmd.Stdout = stdout
 			cmd.Stderr = stderr

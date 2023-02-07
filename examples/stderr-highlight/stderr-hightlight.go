@@ -1,8 +1,8 @@
 package main
 
 import (
+	"context"
 	"encoding/binary"
-	"errors"
 	"github.com/netflix/go-iomux"
 	"io"
 	"os"
@@ -19,40 +19,31 @@ const (
 const colorRed = "\033[31m"
 const colorReset = "\033[0m"
 
-// ignore errs for brevity in this example, you should handle these appropriately
 func main() {
-	mux, _ := iomux.NewMuxUnixGram[OutputType]()
+	mux := iomux.NewMuxUnixGram[OutputType]()
 	defer mux.Close()
 	cmd := exec.Command("sh", "-c", "echo out1 && echo err1 1>&2 && echo out2")
-	stdout, _ := mux.Tag(StdOut)
+	stdout, err := mux.Tag(StdOut)
+	if err != nil {
+		panic(err)
+	}
 	stderr, _ := mux.Tag(StdErr)
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	done := make(chan bool)
-	var runErr error
-	go func() {
-		err := cmd.Run()
-		if err != nil {
-			runErr = err
-		}
-		done <- true
-	}()
 
-	cmdDone := false
+	ctx, cancelFn := context.WithCancel(context.Background())
+	cmd.Start()
+	go func() {
+		cmd.Wait()
+		cancelFn()
+	}()
 	for {
-		select {
-		case cmdDone = <-done:
-		default:
-		}
-		b, t, err := mux.Read()
+		b, t, err := mux.Read(ctx)
 		if err != nil {
-			if errors.Unwrap(err) != os.ErrDeadlineExceeded {
-				panic(err)
-			} else if cmdDone {
-				// If this wasn't an unixgram, you'd need to read until you saw deadline exceeded n times,
-				// where n is the number of tags registered
+			if err == io.EOF {
 				break
 			}
+			panic(err)
 		} else {
 			switch t {
 			case StdOut:
@@ -61,12 +52,6 @@ func main() {
 				io.WriteString(os.Stderr, colorRed)
 				binary.Write(os.Stderr, binary.BigEndian, b)
 				io.WriteString(os.Stderr, colorReset)
-			}
-		}
-		if runErr != nil {
-			runErr = errors.Unwrap(runErr)
-			if exitError, ok := runErr.(*exec.ExitError); ok {
-				os.Exit(exitError.ProcessState.ExitCode())
 			}
 		}
 	}
