@@ -177,6 +177,19 @@ func (mux *Mux[T]) read(ctx context.Context, conn *net.UnixConn, buf []byte) ([]
 	for {
 		_ = conn.SetDeadline(time.Now().Add(deadlineDuration))
 		n, addr, err := conn.ReadFrom(buf)
+		if err != nil {
+			if errors.Unwrap(err) != os.ErrDeadlineExceeded {
+				return nil, zeroTag, err
+			}
+			select {
+			case <-ctx.Done():
+				return nil, zeroTag, io.EOF
+			default:
+				continue
+			}
+		}
+		data := make([]byte, n)
+		copy(data, buf[0:n])
 		var tag T
 		for t, c := range mux.senders {
 			localAddr := c.LocalAddr().String()
@@ -191,19 +204,6 @@ func (mux *Mux[T]) read(ctx context.Context, conn *net.UnixConn, buf []byte) ([]
 				break
 			}
 		}
-		if err != nil {
-			if errors.Unwrap(err) != os.ErrDeadlineExceeded {
-				return nil, zeroTag, err
-			}
-			select {
-			case <-ctx.Done():
-				return nil, zeroTag, io.EOF
-			default:
-				continue
-			}
-		}
-		data := make([]byte, n)
-		copy(data, buf[0:n])
 		return data, tag, nil
 	}
 }
