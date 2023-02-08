@@ -135,6 +135,7 @@ func (mux *Mux[T]) Read(ctx context.Context) ([]byte, T, error) {
 		}
 	}
 
+	sleepDuration := 1 * time.Millisecond
 	for {
 		select {
 		case td := <-mux.recvchan:
@@ -168,7 +169,12 @@ func (mux *Mux[T]) Read(ctx context.Context) ([]byte, T, error) {
 			}
 		default:
 		}
-		time.Sleep(10 * time.Millisecond)
+
+		time.Sleep(sleepDuration)
+		sleepDuration += sleepDuration
+		if sleepDuration > deadlineDuration {
+			sleepDuration = deadlineDuration
+		}
 	}
 }
 
