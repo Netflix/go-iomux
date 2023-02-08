@@ -104,6 +104,7 @@ func TestMuxReadNoData(t *testing.T) {
 	}
 }
 
+// More than one active context isn't really an intended use case, but making sure this logic works correctly
 func TestMuxMultipleContexts(t *testing.T) {
 	mux := &Mux[string]{}
 	t.Cleanup(func() {
