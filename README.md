@@ -35,7 +35,7 @@ This module was inspired by Josh Triplett's Rust crate https://github.com/joshtr
 
 On all platforms except macOS the network defaults to `unixgram`. On Linux, `unixgram` behaves like a pipe and will behave exactly as you'd expect, and always see messages in order. On other UNIXes, there is a possibility of different behaviour when [buffers are full](https://docs.rs/io-mux/latest/io_mux/#portability), but it's unlikely a reader will be outpaced.
 
-Using `unixgram` on macOS when you cannot control the write size of the sender, which rules out just about any usage with `exec.Cmd`, is impossible due a message size limit of 2048 bytes:
+Using `unixgram` on macOS when you cannot control the write size of the sender, is impossible due a message size limit of 2048 bytes:
 ```
 write /dev/stdout: message too long
 ```
