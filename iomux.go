@@ -58,6 +58,15 @@ var (
 
 const deadlineDuration = 100 * time.Millisecond
 
+// Option to override defaults settings
+type Option[T comparable] func(*Mux[T])
+
+func WithCustomDir[T comparable](dir string) Option[T] {
+	return func(m *Mux[T]) {
+		m.dir = dir
+	}
+}
+
 // NewMuxUnix Create a new Mux using 'unix' network.
 func NewMuxUnix[T comparable]() *Mux[T] {
 	return &Mux[T]{network: "unix"}
@@ -75,7 +84,7 @@ func NewMuxUnixPacket[T comparable]() *Mux[T] {
 
 // Tag Create a file to receive data tagged with tag T. Returns an *os.File ready for writing, or an error. If an error
 // occurs when creating the receive end of the connection, the Mux will be closed.
-func (mux *Mux[T]) Tag(tag T) (*os.File, error) {
+func (mux *Mux[T]) Tag(tag T, opts ...Option[T]) (*os.File, error) {
 	if mux.closed {
 		return nil, MuxClosed
 	}
@@ -84,6 +93,11 @@ func (mux *Mux[T]) Tag(tag T) (*os.File, error) {
 		mux.Close()
 		return nil, err
 	}
+
+	for _, opt := range opts {
+		opt(mux)
+	}
+
 	sender, err := mux.createSender(tag)
 	if err != nil {
 		return nil, err
@@ -285,10 +299,13 @@ func (mux *Mux[T]) createReceiver() (e error) {
 			}
 		}
 
-		mux.dir, e = os.MkdirTemp("", "mux")
-		if e != nil {
-			return
+		if mux.dir == "" {
+			mux.dir, e = os.MkdirTemp("", "mux")
+			if e != nil {
+				return
+			}
 		}
+
 		file := filepath.Join(mux.dir, "recv.sock")
 		mux.recvaddr, e = net.ResolveUnixAddr(mux.network, file)
 		if e != nil {
